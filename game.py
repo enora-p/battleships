@@ -19,38 +19,78 @@ class ship:
         
         self.shape = list(zip(*self.shape))[::-1]
     
-    def place(self, xpos: int, ypos: int):
-        self.anchor = ypos, xpos
-        self.positions = {}
-        for i, row in enumerate(self.shape):
-            for j, cell in enumerate(row):
-                if cell:
-                    cellpos = (ypos + i, xpos + j)
-                    self.positions[cellpos] = True
+    def place(self, positions: set[tuple[int, int]]):
+        self.positions = {cellpos: True for cellpos in positions}
         self.placed = True
 
-    def hit(self, xtar: int, ytar: int):
-        assert self.positions[(ytar, xtar)], "Position already hit."
+    def damage(self, xtar: int, ytar: int):
+        assert (ytar, xtar) in self.positions.keys(), "Position already hit."
 
         self.positions[(ytar, xtar)] = False
         if not (True in self.positions.values()):
+            hit = 'S'
             self.sunk = True
-            return 's'
+        else:
+            hit = 'H'
         
-        return 'h'
+        return hit
 
 
 class player:
-    def __init__(self, name: str, gridsize: int, ships = list[ship], isAI: bool = False):
+    def __init__(self, name: str, gridsize: int, ships: list[ship], isAI: bool = False):
         self.name = name
         self.ships = ships
         self.isAI = isAI
         self.alive = True
         self.opponent = None
-        self.tracking = [['w'] * gridsize] * gridsize
+        self.map = [["WU"] * gridsize for _ in range(gridsize)]
+    
+    def strmap(self, *, full: bool = False):
+        if full:
+            lines = ["  " + ''.join([f" {j:02}" for j in range(len(self.map[0]))])] + \
+                    [f"{i} |" + ''.join(["__|" if cell[:-1] == 'W' else "██|" for cell in row]) for i, row in enumerate(self.map)]
+        else:
+            lines = ["  " + ''.join([f" {j:02}" for j in range(len(self.map[0]))])] + \
+                    [f"{i} |" + ''.join(["__|" if cell[-1] == 'U' else "OO|" if cell[-1] == 'M' else "░░|" if cell[-1] == "H" else "╬╬|" for cell in row]) for i, row in enumerate(self.map)]
+        
+        return "\n".join(lines)
 
     def set_opponent(self, opponent: 'player'):
         self.opponent = opponent
+    
+    def setup(self):
+        if self.isAI:
+            pass
+        else:
+            print(self.strmap(full=True))
+            placed_positions = set()
+            for idx, ship in enumerate(self.ships):
+                placement_invalid = True
+                while placement_invalid:
+                    xpos, ypos = int(input("Anchor horizontal position: ")), int(input("Anchor vertical position: "))    
+                    ship_positions = {(ypos + i, xpos + j) for i, row in enumerate(ship.shape) for j, cell in enumerate(row) if cell}
+                    
+                    if not (0 <= xpos < len(self.map[0]) and 0 <= ypos < len(self.map)):
+                        print("Cannot place ship out of bounds, please try again.")
+                    elif not placed_positions.isdisjoint(ship_positions):
+                        print("Cannot have ships overlapping, please try again.")
+                    else:
+                        placement_invalid = False
+                        for ypos, xpos in ship_positions:
+                            if not (0 <= xpos < len(self.map[0]) and 0 <= ypos < len(self.map)):
+                                placement_invalid = True
+                        
+                        if placement_invalid:
+                            print("Cannot place ship out of bounds, please try again.")
+
+                for ypos, xpos in ship_positions:
+                    self.map[ypos][xpos] = str(idx) + 'U'
+                    for line in self.map: print(line)
+                
+                ship.place(ship_positions)
+                placed_positions.update(ship_positions)
+                print(self.strmap(full=True))
+                print(f"{self.name}'s ship, {ship.name} #{idx} has been successfully placed!")
 
     def play(self):
         if self.isAI:
@@ -58,39 +98,72 @@ class player:
         else:
             target_invalid = True
             while target_invalid:
+                print(self.opponent.strmap())
                 xtar, ytar = int(input("Target horizontal position: ")), int(input("Target vertical position: "))
                 
-                if not (0 <= xtar < len(self.tracking[0])) or not (0 <= ytar < len(self.tracking)):
+                if not (0 <= xtar < len(self.opponent.map[0])) or not (0 <= ytar < len(self.opponent.map)):
                     target_invalid = True
                     print("Target is out of bounds, please try again.")
-                elif self.tracking[ytar][xtar] in "mhs":
+                elif self.opponent.map[ytar][xtar][-1] != 'U':
                     target_invalid = True
                     print("Target has already been hit, please try again.")
                 else:
                     target_invalid = False
             
-            hit, ship_index = self.opponent.get_shot(xtar, ytar)
-            self.tracking[ytar][xtar] = hit
-
-            if hit == 's':
-                for ypos, xpos in self.opponent.ships[ship_index].positions.keys():
-                    self.tracking[ypos][xpos] = 's'
+            self.opponent.get_shot(xtar, ytar)
 
     def get_shot(self, xtar: int, ytar: int):
-        hit = 'm'
-        for idx, ship in enumerate(self.ships):
-            if (ytar, xtar) in ship.positions.keys():
-                hit = ship.hit(xtar, ytar)
-        
-        if hit == 'm':
-            print("MISS!")
-        elif hit == 'h':
-            print("HIT!")
-        else:
-            print("SUNK!")
+        assert self.map[ytar][xtar][-1] == 'U', "Position already hit."
 
-        return (hit, idx)
+        if self.map[ytar][xtar][:-1] == 'W':
+            self.map[ytar][xtar] = self.map[ytar][xtar][:-1] + 'M'
+            print("MISS!")
+        else:
+            id = self.map[ytar][xtar][:-1]
+            hit = self.ships[int(id)].damage(xtar, ytar)
+            self.map[ytar][xtar] = id + hit
+
+            if hit == 'S':
+                for ypos, xpos in self.ships[int(id)].positions.keys():
+                    self.map[ypos][xpos] = self.map[ypos][xpos][:-1] + hit
+                print("SUNK!")
+
+                self.alive = False
+                i, n = 0, len(self.ships)
+                while not self.alive and i < n:
+                    if not self.ships[i].sunk:
+                        self.alive = True
+                    else: i += 1
+            else:
+                print("HIT!")
 
 class battle:
-    def __init__(self, gridsize, ships, player1isAI, player2isAI):
-        pass
+    def __init__(self, gridsize: int, possible_ships: dict[str, list[tuple[bool, ...]]], P1_name: str, P2_name: str, P1isAI: bool = False, P2isAI: bool = False):
+        self.gridzise = gridsize
+
+        P1_ships = [ship(name, shape) for name, shape in possible_ships.items()]
+        P2_ships = [ship(name, shape) for name, shape in possible_ships.items()]
+
+        self.player1 = player(P1_name, gridsize, P1_ships, P1isAI)
+        self.player2 = player(P2_name, gridsize, P2_ships, P2isAI)
+
+        self.player1.set_opponent(self.player2)
+        self.player2.set_opponent(self.player1)
+    
+    def start(self):
+        # Ship placement procedure
+        self.player1.setup()
+        self.player2.setup()
+
+        # Start of actual game
+        winner = None
+        while winner is None:
+            self.player1.play()
+            if not self.player2.alive:
+                winner = self.player1
+            else:
+                self.player2.play()
+                if not self.player1.alive:
+                    winner = self.player2
+        
+        print(f"{winner.name} won the game! Congrats!")
